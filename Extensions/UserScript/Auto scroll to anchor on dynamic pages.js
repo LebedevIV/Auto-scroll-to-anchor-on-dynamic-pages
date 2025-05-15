@@ -3,7 +3,7 @@
 // @name:en      Auto scroll to anchor on dynamic pages
 // @name:ru      Автоматическая прокрутка к якорю на динамических страницах
 // @namespace    http://tampermonkey.net/
-// @version      2025-05-15_6-50 // Не забывайте обновлять версию
+// @version      2025-05-15_15-5 // Не забывайте обновлять версию
 // @description  Tries to scroll to an anchor on pages with dynamic content loading by repeatedly scrolling down. Handles hash changes.
 // @description:en  Tries to scroll to an anchor on pages with dynamic content loading by repeatedly scrolling down. Handles hash changes.
 // @description:ru  Пытается прокрутить до якоря на страницах с динамической загрузкой контента, многократно прокручивая вниз. Обрабатывает изменения хеша.
@@ -32,11 +32,11 @@
             // Это может быть Chrome расширение или Firefox (где chrome является псевдонимом browser)
             // Для большей точности можно проверить chrome.runtime.getURL("").startsWith("moz-extension://") для Firefox
             if (chrome.runtime.getURL && chrome.runtime.getURL("").startsWith("moz-extension://")) {
-                 executionEnvironment = 'extension_firefox';
-                 logPrefix = "[AutoScrollExt FF]";
+                executionEnvironment = 'extension_firefox';
+                logPrefix = "[AutoScrollExt FF]";
             } else {
-                 executionEnvironment = 'extension_chrome_or_edge'; // или другое на базе Chromium
-                 logPrefix = "[AutoScrollExt Cr]";
+                executionEnvironment = 'extension_chrome_or_edge'; // или другое на базе Chromium
+                logPrefix = "[AutoScrollExt Cr]";
             }
         }
     } catch (e) {
@@ -44,6 +44,13 @@
         // В этом случае остаемся со значением по умолчанию 'userscript'.
     }
     // ------------------------------------
+
+    // --- Попытка сохранить исходный якорь ---
+    let initialAnchorOnLoad = window.location.hash.substring(1);
+    if (initialAnchorOnLoad) {
+        log(`Initial anchor detected at document-start: #${initialAnchorOnLoad}`);
+    }
+    // --------------------------------------------
 
     // Настройки (остаются общими)
     const MAX_ATTEMPTS = 30;
@@ -60,9 +67,9 @@
         console.log(`${logPrefix} ${message}`);
     }
     if (executionEnvironment !== 'userscript') { // Для расширений можно добавить ID расширения, если нужно
-      log(`Running as ${executionEnvironment}. Extension ID (if applicable): ${ (typeof browser !== 'undefined' && browser.runtime && browser.runtime.id) || (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) || 'N/A'}`);
+        log(`Running as ${executionEnvironment}. Extension ID (if applicable): ${ (typeof browser !== 'undefined' && browser.runtime && browser.runtime.id) || (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) || 'N/A'}`);
     } else {
-      log(`Running as ${executionEnvironment}.`);
+        log(`Running as ${executionEnvironment}.`);
     }
 
 
@@ -74,21 +81,33 @@
         }
     }
 
-    function findAndScrollToElement(anchorName) {
-        const currentUrlAnchor = window.location.hash.substring(1);
-        if (anchorName && currentUrlAnchor !== anchorName && currentUrlAnchor !== '') {
-            log(`URL hash changed to #${currentUrlAnchor} while searching for #${anchorName}. Stopping this specific search.`);
-            return false;
+    // ... (функции log, stopCurrentSearch, findAndScrollToElement, startSearchingForAnchor) ...
+    // Важно: findAndScrollToElement должна быть готова к тому, что currentUrlAnchor может быть пуст,
+    // если сайт успел его удалить, но мы все еще ищем initialAnchorOnLoad.
+
+    /**
+     * Модифицированная findAndScrollToElement
+     * @param {string} anchorNameToFind - Имя якоря для поиска.
+     * @param {string} currentExpectedUrlAnchor - Якорь, который мы ОЖИДАЕМ сейчас в URL (может быть '' если сайт его удалил).
+     * @returns {boolean}
+     */
+    function findAndScrollToElement(anchorNameToFind, currentExpectedUrlAnchor) {
+        if (!anchorNameToFind) return false;
+
+        // Проверка, не изменился ли ЦЕЛЕВОЙ якорь, к которому мы стремимся
+        // (например, если пользователь кликнул на другой якорь уже после начала поиска)
+        const actualCurrentUrlAnchor = window.location.hash.substring(1);
+        if (actualCurrentUrlAnchor && actualCurrentUrlAnchor !== anchorNameToFind && actualCurrentUrlAnchor !== currentExpectedUrlAnchor) {
+            log(`User navigated to a new anchor #${actualCurrentUrlAnchor} while searching for #${anchorNameToFind}. Stopping this search.`);
+            return false; // Пользователь перешел на другой якорь, этот поиск неактуален
         }
 
-        if (!anchorName) return false;
-
-        const elementById = document.getElementById(anchorName);
-        const elementByName = !elementById ? document.querySelector(`[name="${anchorName}"]`) : null;
+        const elementById = document.getElementById(anchorNameToFind);
+        const elementByName = !elementById ? document.querySelector(`[name="${anchorNameToFind}"]`) : null;
         const targetElement = elementById || elementByName;
 
         if (targetElement) {
-            log(`Anchor #${anchorName} found.`);
+            log(`Anchor #${anchorNameToFind} found.`);
             targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
             const originalBg = targetElement.style.backgroundColor;
@@ -102,34 +121,34 @@
         return false;
     }
 
-    function startSearchingForAnchor(anchorNameToSearch) {
+    /**
+     * Модифицированная startSearchingForAnchor
+     * @param {string} anchorNameToSearch - Имя якоря для поиска.
+     * @param {string} currentUrlAnchorAtStart - Якорь, который был в URL в момент инициации этого поиска
+     */
+    function startSearchingForAnchor(anchorNameToSearch, currentUrlAnchorAtStart) {
         stopCurrentSearch(`starting new search for #${anchorNameToSearch}`);
 
         if (!anchorNameToSearch) {
-            log("No anchor specified in URL, nothing to do.");
+            log("No anchor specified for search, nothing to do.");
             currentSearchAnchorName = '';
             return;
         }
 
-        currentSearchAnchorName = anchorNameToSearch;
-        log(`Starting search for anchor: #${currentSearchAnchorName}`);
+        currentSearchAnchorName = anchorNameToSearch; // Это якорь, который мы ИЩЕМ на странице
+        log(`Starting search for anchor: #${currentSearchAnchorName} (URL hash was #${currentUrlAnchorAtStart || 'empty'} at initiation)`);
 
         let attempts = 0;
 
-        if (findAndScrollToElement(currentSearchAnchorName)) {
+        if (findAndScrollToElement(currentSearchAnchorName, currentUrlAnchorAtStart)) {
             stopCurrentSearch(`found #${currentSearchAnchorName} immediately`);
             return;
         }
 
         currentIntervalId = setInterval(() => {
-            const currentUrlAnchorWhenIntervalFired = window.location.hash.substring(1);
-            if (currentUrlAnchorWhenIntervalFired !== currentSearchAnchorName) {
-                log(`URL hash changed to #${currentUrlAnchorWhenIntervalFired} (or removed) while actively searching for #${currentSearchAnchorName}. Stopping this search.`);
-                stopCurrentSearch("URL hash changed during interval");
-                return;
-            }
-
-            if (findAndScrollToElement(currentSearchAnchorName)) {
+            // Важно: передаем currentUrlAnchorAtStart, чтобы findAndScrollToElement
+            // знала, какой якорь мы ожидали в URL на момент начала поиска.
+            if (findAndScrollToElement(currentSearchAnchorName, currentUrlAnchorAtStart)) {
                 stopCurrentSearch(`found #${currentSearchAnchorName} after scrolling`);
                 return;
             }
@@ -146,34 +165,54 @@
 
             setTimeout(() => {
                 if (!currentIntervalId) return;
-
-                const currentUrlAnchorForFastCheck = window.location.hash.substring(1);
-                if (currentUrlAnchorForFastCheck !== currentSearchAnchorName) {
-                    return;
-                }
-
-                if (findAndScrollToElement(currentSearchAnchorName)) {
+                if (findAndScrollToElement(currentSearchAnchorName, currentUrlAnchorAtStart)) {
                     stopCurrentSearch(`found #${currentSearchAnchorName} after scroll and fast check`);
                 }
             }, FAST_CHECK_DELAY_MS);
-
         }, SCROLL_INTERVAL_MS);
     }
 
     function initialLoadOrHashChangeHandler() {
-        const anchorNameFromUrl = window.location.hash.substring(1);
-        if (anchorNameFromUrl === currentSearchAnchorName && currentIntervalId !== null) {
+        let anchorToActUpon = window.location.hash.substring(1);
+        let currentUrlAnchorForContext = anchorToActUpon; // Якорь, который СЕЙЧАС в URL
+
+        if (!anchorToActUpon && initialAnchorOnLoad) {
+            // Если в URL якоря нет, НО он был при самой первой загрузке
+            log(`URL hash is empty, but an initial anchor #${initialAnchorOnLoad} was detected. Attempting to use it.`);
+            anchorToActUpon = initialAnchorOnLoad;
+            // currentUrlAnchorForContext остается пустым, так как сайт его удалил
+        }
+
+        // Сброс initialAnchorOnLoad после первой попытки его использовать,
+        // чтобы при последующих hashchange (если пользователь кликает по другим якорям на странице)
+        // мы не пытались вернуться к самому первому якорю.
+        // Но делаем это только если мы действительно собираемся действовать (т.е. anchorToActUpon не пуст)
+        if (anchorToActUpon) {
+            initialAnchorOnLoad = null; // Используем его только один раз
+        }
+
+
+        // Это условие для предотвращения перезапуска, если хеш не изменился, немного усложняется.
+        // Мы должны сравнивать anchorToActUpon с тем, что мы активно ищем (currentSearchAnchorName).
+        if (anchorToActUpon === currentSearchAnchorName && currentIntervalId !== null) {
+             // Если мы уже ищем этот якорь (или пытались искать), и поиск активен, ничего не делаем.
             return;
         }
-        if (!anchorNameFromUrl && currentSearchAnchorName) {
-            stopCurrentSearch(`anchor removed from URL (was #${currentSearchAnchorName})`);
+
+        if (!anchorToActUpon && currentSearchAnchorName) {
+            stopCurrentSearch(`Anchor removed or no longer relevant (was #${currentSearchAnchorName})`);
             currentSearchAnchorName = '';
             return;
         }
-        startSearchingForAnchor(anchorNameFromUrl);
+
+        // Запускаем поиск, передавая якорь, который нужно найти,
+        // и якорь, который был в URL в момент принятия решения о поиске.
+        startSearchingForAnchor(anchorToActUpon, currentUrlAnchorForContext);
     }
 
     function onPageReady() {
+        // initialAnchorOnLoad уже должен быть установлен здесь
+        log(`onPageReady. Initial anchor was: #${initialAnchorOnLoad || 'none'}. Current hash: #${window.location.hash.substring(1) || 'none'}`);
         setTimeout(initialLoadOrHashChangeHandler, INITIAL_DELAY_MS);
         window.addEventListener('hashchange', initialLoadOrHashChangeHandler, false);
     }
@@ -187,5 +226,6 @@
         // DOMContentLoaded уже сработал, или мы находимся в состоянии interactive/complete
         onPageReady();
     }
+
 
 })();
